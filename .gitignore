@@ -1,0 +1,22 @@
+## Build output
+bin/
+obj/
+publish/
+dist/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+## Rider / VS
+.vs/
+.idea/
+
+## Runtime artifacts (never commit a user's scan history)
+*.db
+*.db-shm
+*.db-wal
+config.json
+
+## Misc
+*.log

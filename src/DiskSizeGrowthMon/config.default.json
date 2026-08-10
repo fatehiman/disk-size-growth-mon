@@ -1,0 +1,10 @@
+{
+  "MaxDepth": 6,
+  "MinFolderSizeGB": 0.5,
+  "MaxReportRows": 300,
+  "LogMaxLines": 1000,
+  "LogKeepLines": 500,
+  "DatabasePath": "diskgrowth.db",
+  "ExcludedPaths": [],
+  "RetainScansPerDrive": 30
+}
