@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace DiskSizeGrowthMon;
 
 /// <summary>A folder as persisted by one scan. <paramref name="SizeBytes"/> is recursive (folder + all descendants).</summary>
@@ -17,9 +19,18 @@ public sealed record ScanSummary(
     long TotalBytes,
     int MaxDepth,
     long MinSizeBytes,
-    int DurationMs)
+    int DurationMs,
+    long? FreeBytes = null,
+    long? DriveSizeBytes = null)
 {
-    public string Label => $"{StartedLocal:yyyy-MM-dd HH:mm} {Drive}";
+    private const double GB = 1024d * 1024d * 1024d;
+
+    /// <summary>
+    /// Free space is null for scans recorded before it was captured; those keep the old label.
+    /// </summary>
+    public string Label => FreeBytes is long free
+        ? $"{StartedLocal:yyyy-MM-dd HH:mm} {Drive} ({(free / GB).ToString("F1", CultureInfo.InvariantCulture)}GB)"
+        : $"{StartedLocal:yyyy-MM-dd HH:mm} {Drive}";
 
     public override string ToString() => Label;
 }

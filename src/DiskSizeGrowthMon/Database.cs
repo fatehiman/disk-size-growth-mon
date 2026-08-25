@@ -41,7 +41,29 @@ public sealed class Database : IDisposable
         Migrate();
     }
 
-    private void Migrate() => Exec("""
+    private void Migrate()
+    {
+        Exec(SchemaSql);
+
+        // Databases written before free space was captured keep NULL here; the UI renders
+        // those without the "(x GB)" suffix rather than inventing a number.
+        AddColumnIfMissing("scans", "free_bytes", "INTEGER NULL");
+        AddColumnIfMissing("scans", "drive_size_bytes", "INTEGER NULL");
+    }
+
+    private void AddColumnIfMissing(string table, string column, string decl)
+    {
+        using (var probe = _cn.CreateCommand())
+        {
+            probe.CommandText = $"SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = $c;";
+            probe.Parameters.AddWithValue("$c", column);
+            if (Convert.ToInt64(probe.ExecuteScalar()!) > 0) return;
+        }
+
+        Exec($"ALTER TABLE {table} ADD COLUMN {column} {decl};");
+    }
+
+    private const string SchemaSql = """
         CREATE TABLE IF NOT EXISTS scans (
             id             INTEGER PRIMARY KEY AUTOINCREMENT,
             drive          TEXT    NOT NULL,          -- 'C:'
@@ -52,7 +74,9 @@ public sealed class Database : IDisposable
             min_size_bytes INTEGER NOT NULL,
             folder_count   INTEGER NOT NULL,
             total_bytes    INTEGER NOT NULL,
-            duration_ms    INTEGER NOT NULL
+            duration_ms    INTEGER NOT NULL,
+            free_bytes       INTEGER NULL,      -- drive free space when the scan started
+            drive_size_bytes INTEGER NULL       -- drive capacity when the scan started
         );
 
         CREATE INDEX IF NOT EXISTS ix_scans_drive_time ON scans(drive, started_utc DESC);
@@ -76,13 +100,14 @@ public sealed class Database : IDisposable
             growth_bytes INTEGER NOT NULL,
             PRIMARY KEY (scan_id, rank)
         ) WITHOUT ROWID;
-        """);
+        """;
 
     /// <summary>
     /// Persists a finished scan and its growth report in one transaction. Partial scans are
     /// never written: their sizes would be wrong and would poison the next comparison.
     /// </summary>
-    public long SaveScan(string drive, DateTime startedUtc, DateTime startedLocal, AppConfig cfg, ScanResult result)
+    public long SaveScan(string drive, DateTime startedUtc, DateTime startedLocal, AppConfig cfg, ScanResult result,
+                         long? freeBytes = null, long? driveSizeBytes = null)
     {
         lock (_gate)
         {
@@ -96,8 +121,10 @@ public sealed class Database : IDisposable
                 cmd.Transaction = tx;
                 cmd.CommandText = """
                     INSERT INTO scans (drive, started_utc, started_local, prev_scan_id,
-                                       max_depth, min_size_bytes, folder_count, total_bytes, duration_ms)
-                    VALUES ($drive, $utc, $local, $prev, $depth, $min, $folders, $total, $ms);
+                                       max_depth, min_size_bytes, folder_count, total_bytes, duration_ms,
+                                       free_bytes, drive_size_bytes)
+                    VALUES ($drive, $utc, $local, $prev, $depth, $min, $folders, $total, $ms,
+                            $free, $capacity);
                     SELECT last_insert_rowid();
                     """;
                 cmd.Parameters.AddWithValue("$drive", drive);
@@ -109,6 +136,8 @@ public sealed class Database : IDisposable
                 cmd.Parameters.AddWithValue("$folders", result.Folders.Count);
                 cmd.Parameters.AddWithValue("$total", result.TotalBytes);
                 cmd.Parameters.AddWithValue("$ms", (long)result.Elapsed.TotalMilliseconds);
+                cmd.Parameters.AddWithValue("$free", (object?)freeBytes ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$capacity", (object?)driveSizeBytes ?? DBNull.Value);
                 scanId = (long)cmd.ExecuteScalar()!;
             }
 
@@ -189,7 +218,8 @@ public sealed class Database : IDisposable
             using var cmd = _cn.CreateCommand();
             cmd.CommandText = """
                 SELECT s.id, s.drive, s.started_local, s.prev_scan_id, p.started_local,
-                       s.folder_count, s.total_bytes, s.max_depth, s.min_size_bytes, s.duration_ms
+                       s.folder_count, s.total_bytes, s.max_depth, s.min_size_bytes, s.duration_ms,
+                       s.free_bytes, s.drive_size_bytes
                 FROM scans s
                 LEFT JOIN scans p ON p.id = s.prev_scan_id
                 ORDER BY s.started_utc DESC, s.id DESC;
@@ -207,7 +237,9 @@ public sealed class Database : IDisposable
                     TotalBytes: r.GetInt64(6),
                     MaxDepth: r.GetInt32(7),
                     MinSizeBytes: r.GetInt64(8),
-                    DurationMs: r.GetInt32(9)));
+                    DurationMs: r.GetInt32(9),
+                    FreeBytes: r.IsDBNull(10) ? null : r.GetInt64(10),
+                    DriveSizeBytes: r.IsDBNull(11) ? null : r.GetInt64(11)));
             }
             return list;
         }

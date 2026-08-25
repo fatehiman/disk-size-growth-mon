@@ -19,7 +19,12 @@
     <!-- Requires elevation (see app.manifest) so system folders can be enumerated. -->
     <ApplicationManifest>app.manifest</ApplicationManifest>
 
-    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Must stay false: in globalization-invariant mode WinForms throws a
+         CultureNotFoundException while handling WM_INPUTLANGCHANGE (the message Windows
+         posts when the app gains/loses focus with a keyboard layout switch), because
+         InputLanguage.LanguageTag resolves the layout's LCID via CultureInfo.GetCultureInfo(int).
+         On Windows the ICU data comes from the OS (icu.dll), so this costs no extra size. -->
+    <InvariantGlobalization>false</InvariantGlobalization>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>

@@ -191,7 +191,8 @@ public sealed class MainForm : Form
     protected override void OnShown(EventArgs e)
     {
         base.OnShown(e);
-        try { _split.SplitterDistance = 240; } catch { /* window too narrow to honour */ }
+        // 270 px fits the widest history label, 'yyyy-MM-dd HH:mm C: (123.4GB)'.
+        try { _split.SplitterDistance = 270; } catch { /* window too narrow to honour */ }
     }
 
     private static DataGridView BuildGrid(Font monospace)
@@ -277,6 +278,20 @@ public sealed class MainForm : Form
             _label = $"{Letter}  {Truncate(name, 16),-16}  {d.TotalFreeSpace / GB,7:F1} GB free of {d.TotalSize / GB,7:F1} GB";
         }
 
+        /// <summary>Free/total bytes read fresh - the cached label can be minutes old by scan time.</summary>
+        public (long? Free, long? Total) ReadSpace()
+        {
+            try
+            {
+                var d = new DriveInfo(Root);
+                return (d.TotalFreeSpace, d.TotalSize);
+            }
+            catch
+            {
+                return (null, null);   // drive removed or refusing to answer; the scan still runs
+            }
+        }
+
         private static string Truncate(string s, int n) => s.Length <= n ? s : s[..(n - 1)] + "\u2026";
 
         public override string ToString() => _label;
@@ -311,6 +326,7 @@ public sealed class MainForm : Form
 
         DateTime startedUtc = DateTime.UtcNow;
         DateTime startedLocal = DateTime.Now;
+        (long? freeBytes, long? driveSizeBytes) = drive.ReadSpace();
 
         AppendLogLine($"=== Scanning {drive.Root} at {startedLocal:yyyy-MM-dd HH:mm:ss} " +
                       $"(max depth {_cfg.MaxDepth}, min folder size {_cfg.MinFolderSizeGB:F2} GB) ===");
@@ -326,11 +342,12 @@ public sealed class MainForm : Form
             TaskScheduler.Default);
 
         _scanTask = task;
-        _ = AwaitScanAsync(task, startedUtc, startedLocal);
+        _ = AwaitScanAsync(task, startedUtc, startedLocal, freeBytes, driveSizeBytes);
         UpdateButtons();
     }
 
-    private async Task AwaitScanAsync(Task<ScanResult> task, DateTime startedUtc, DateTime startedLocal)
+    private async Task AwaitScanAsync(Task<ScanResult> task, DateTime startedUtc, DateTime startedLocal,
+                                      long? freeBytes, long? driveSizeBytes)
     {
         ScanResult? result = null;
         Exception? failure = null;
@@ -369,7 +386,7 @@ public sealed class MainForm : Form
         {
             try
             {
-                long scanId = _db.SaveScan(_scanDrive, startedUtc, startedLocal, _cfg, result);
+                long scanId = _db.SaveScan(_scanDrive, startedUtc, startedLocal, _cfg, result, freeBytes, driveSizeBytes);
                 int pruned = _db.PruneOldScans(_scanDrive, _cfg.RetainScansPerDrive);
 
                 AppendLogLine($"=== Done in {Format(_elapsed)}. {result.DirectoryCount:N0} folders, " +
@@ -549,11 +566,16 @@ public sealed class MainForm : Form
 
         List<ReportRow> rows = _db.GetReport(scan.Id);
 
+        // Free space is unknown for scans stored before it was recorded; those simply omit it.
+        string free = scan.FreeBytes is long f
+            ? $"  \u2022  free {f / GB:F1} GB" + (scan.DriveSizeBytes is long cap ? $" of {cap / GB:F1} GB" : "")
+            : "";
+
         _lblReportHeader.Text = scan.PrevStartedLocal is DateTime prev
             ? $"{scan.Drive}  \u2022  {scan.StartedLocal:yyyy-MM-dd HH:mm}  vs  {prev:yyyy-MM-dd HH:mm}  \u2022  " +
-              $"{rows.Count} growing folder(s)  \u2022  drive total {scan.TotalBytes / GB:F1} GB"
+              $"{rows.Count} growing folder(s)  \u2022  drive total {scan.TotalBytes / GB:F1} GB" + free
             : $"{scan.Drive}  \u2022  {scan.StartedLocal:yyyy-MM-dd HH:mm}  \u2022  FIRST SCAN of this drive â€” " +
-              $"every folder is compared against 0, so this is a baseline, not real growth.";
+              $"every folder is compared against 0, so this is a baseline, not real growth." + free;
 
         _grid.SuspendLayout();
         _grid.Rows.Clear();

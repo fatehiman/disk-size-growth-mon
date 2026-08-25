@@ -119,7 +119,9 @@ window — you press **Scan**.
 
 **Report panel**
 
-- History is sorted newest-first and mixes drives; each entry reads `2026-08-10 09:35 C:`.
+- History is sorted newest-first and mixes drives; each entry reads `2026-08-10 09:35 C: (21.4GB)`,
+  where the number in parentheses is the drive's free space when that scan started. Scans recorded
+  before that was captured show no parentheses — the value cannot be reconstructed after the fact.
 - A scan in progress is **not** in the list. It is added at the top and auto-selected when it completes.
 - The table is fixed-sort — largest growth first — and column headers are deliberately not clickable.
 - At most `MaxReportRows` (default 300) rows are stored and shown.

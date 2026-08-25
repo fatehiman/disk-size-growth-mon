@@ -1,4 +1,4 @@
-using DiskSizeGrowthMon;
+﻿using DiskSizeGrowthMon;
 
 // End-to-end check of the non-UI half of the app: walk a synthetic tree, persist two scans,
 // and assert the growth report says what it should. Run with:  dotnet run --project tests/SmokeTests
@@ -85,7 +85,7 @@ File.Delete(Path.Combine(tree, @"stable\d.bin"));  // shrinks
 MakeFile(@"brandnew\e.bin", 120);                  // did not exist before
 
 var s2 = new DiskScanner(cfg, pause, _ => { }).Scan(tree, CancellationToken.None);
-long id2 = db.SaveScan("T:", DateTime.UtcNow, DateTime.Now, cfg, s2);
+long id2 = db.SaveScan("T:", DateTime.UtcNow, DateTime.Now, cfg, s2, freeBytes: 21_000_000_000L, driveSizeBytes: 100_000_000_000L);
 var report2 = db.GetReport(id2);
 
 Console.WriteLine("\nscan 2 growth report:");
@@ -107,7 +107,9 @@ var scans = db.GetScans();
 Check("history is newest-first", scans.Count == 2 && scans[0].Id == id2 && scans[1].Id == id1);
 Check("scan 2 links back to scan 1", scans[0].PrevScanId == id1 && scans[0].PrevStartedLocal is not null);
 Check("scan 1 has no predecessor", scans[1].PrevScanId is null);
-Check("history label reads 'yyyy-MM-dd HH:mm D:'", scans[0].Label.EndsWith(" T:") && scans[0].Label.Length == 19);
+Check("label carries the free space recorded with the scan", scans[0].Label.EndsWith(" T: (19.6GB)"));
+Check("label of a scan stored without free space keeps the old form", scans[1].Label.EndsWith(" T:") && scans[1].Label.Length == 19);
+Check("free/total space round-trip through the database", scans[0].FreeBytes == 21_000_000_000L && scans[0].DriveSizeBytes == 100_000_000_000L && scans[1].FreeBytes is null);
 
 db.PruneOldScans("T:", 1);
 Check("retention keeps only the newest scan", db.GetScans().Count == 1);
