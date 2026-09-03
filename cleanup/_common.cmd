@@ -21,6 +21,8 @@ if /i "%~1"=="rmdir"   goto rmdir_action
 if /i "%~1"=="confirm" goto confirm_action
 if /i "%~1"=="running" goto running_action
 if /i "%~1"=="dirsize" goto dirsize_action
+if /i "%~1"=="close"   goto close_action
+if /i "%~1"=="kill"    goto kill_action
 echo _common.cmd: unknown action "%~1"
 exit /b 1
 
@@ -53,6 +55,69 @@ rem 0 if a process with that image name is running, 1 if not. Used by the
 rem scripts that must not touch files an IDE or emulator has open.
 tasklist /fi "imagename eq %~2" 2> nul | find /i "%~2" > nul
 exit /b %ERRORLEVEL%
+
+:close_action
+rem Asks every process with image name %2 to close, then waits up to %3 seconds
+rem for them all to go. Returns 0 if the name is gone, 1 if something is left.
+rem
+rem `taskkill` WITHOUT /f, i.e. a WM_CLOSE to each window, so the app shuts down
+rem the way it would if you clicked the X: a browser writes its session out and
+rem offers to restore your tabs next launch. /f skips all of that.
+rem
+rem A browser is dozens of processes and only the parent has a window; the
+rem renderers and the GPU process exit on their own once it does. So this polls
+rem the image name rather than assuming one round of WM_CLOSE emptied it.
+rem
+rem Best-effort by nature. Chrome and Firefox are classic Win32 processes and do
+rem honour it, but a packaged/Store app (Windows 11's Notepad, for one) can sit
+rem there ignoring WM_CLOSE indefinitely, and so can any app showing a "save
+rem changes?" prompt. Callers must handle the 1 return rather than assume 0.
+if not exist "%SystemRoot%\System32\tasklist.exe" exit /b 1
+tasklist /fi "imagename eq %~2" 2> nul | find /i "%~2" > nul
+if errorlevel 1 exit /b 0
+echo   asking %~2 to close^(up to %~3s^)...
+taskkill /im "%~2" > nul 2> nul
+set "_dsm_left=%~3"
+:close_wait
+tasklist /fi "imagename eq %~2" 2> nul | find /i "%~2" > nul
+if errorlevel 1 goto close_gone
+if "%_dsm_left%"=="0" goto close_timeout
+set /a _dsm_left-=1
+rem ping, not timeout: timeout refuses to run with stdin redirected, which it
+rem always is when the app is capturing this output.
+ping -n 2 127.0.0.1 > nul
+goto close_wait
+
+:close_gone
+set "_dsm_left="
+echo   %~2 has closed.
+exit /b 0
+
+:close_timeout
+set "_dsm_left="
+echo   %~2 is still running after %~3s.
+exit /b 1
+
+:kill_action
+rem Force-terminates the image name and everything it started. Only for when
+rem :close has already been given a fair chance -- this one loses whatever the
+rem app had not written to disk.
+rem
+rem Returns 0 if the name is gone afterwards, 1 if something survived, matching
+rem :close. Note that `find`'s own exit code is the other way round (0 means it
+rem found a match, i.e. the process is still there), so it is mapped rather than
+rem passed through.
+echo   force-closing %~2...
+taskkill /f /t /im "%~2" > nul 2> nul
+ping -n 4 127.0.0.1 > nul
+tasklist /fi "imagename eq %~2" 2> nul | find /i "%~2" > nul
+if errorlevel 1 goto kill_gone
+echo   %~2 SURVIVED the force-close.
+exit /b 1
+
+:kill_gone
+echo   %~2 is gone.
+exit /b 0
 
 :dirsize_action
 rem Prints "<n> MB  <path>" for a directory, or nothing if it is absent. Used

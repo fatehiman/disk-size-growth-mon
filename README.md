@@ -39,7 +39,7 @@ Think `du` on a schedule you control, with the diff already computed.
 - Shows a scan history; picking any past scan renders its report instantly (nothing is recomputed).
 - Right-click (or double-click) any report row to open that folder in Explorer, so you can go straight
   from "what grew" to doing something about it.
-- Runs **cleanup scripts** — plain `.bat` files sitting next to the exe, fifteen of them shipped — one at a
+- Runs **cleanup scripts** — plain `.bat` files sitting next to the exe, seventeen of them shipped — one at a
   time, with their output in front of you and a Kill button when one wedges.
 - Pause / stop mid-scan, a live log of what is being walked, single-instance enforcement, and a clean
   shutdown that leaves nothing running.
@@ -335,6 +335,8 @@ that runs the reclaiming half:
 | `13-android-studio-and-sdk-caches.bat` | Studio index/caches/logs, SDK scratch, `~\.android\cache` | Refuses while Studio is open |
 | `14-android-emulator-snapshots.bat` | AVD Quick Boot snapshots and `/cache` | Apps and data survive; next launch is a cold boot. Confirms first |
 | `15-android-emulator-wipe-data.bat` | AVD `userdata`, snapshots, `/cache`, SD-card delta | **Factory-resets every emulator.** Confirms first |
+| `16-chrome-caches.bat` | Chrome HTTP/code/GPU/service-worker caches, all profiles | Confirms, then closes Chrome. Cookies, passwords, history, bookmarks and tabs untouched |
+| `17-firefox-caches.bat` | Firefox `cache2`, `startupCache`, Cache API store, all profiles | Confirms, then closes Firefox. Same guarantees |
 
 Most are caches that regenerate; the exceptions are called out in the table and confirm in a dialog
 first. Scripts split into a safe half and a costly half — `11`/`12` for Gradle, `14`/`15` for the
@@ -359,6 +361,11 @@ The lines *not* crossed are as much of the design as the lines that are:
   Manager, which knows the dependency graph.
 - **Gradle's `modules-2` is left to its own script.** Derived caches cost a slower build; downloads
   cost bandwidth and minutes. Different decisions, so different scripts.
+- **The browser scripts name their targets instead of globbing `*Cache*`.** Chrome files `Cookies`,
+  `Login Data` and `History` in the same directory as `Cache`, and Firefox puts the Cache API store
+  inside site data next to `localStorage` and IndexedDB. A glob would log you out and lose site
+  state. They also refuse to delete anything if the browser is still running after the close attempt
+  — clearing a cache the browser has open corrupts it rather than freeing it.
 
 `_common.cmd` holds the shared prologue/epilogue and helpers: the UTF-8 code page, the free-space
 before/after summary, `rmdir` (refuses to touch a drive root), `dirsize`, `running` (is an IDE or

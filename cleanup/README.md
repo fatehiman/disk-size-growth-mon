@@ -23,12 +23,21 @@ Nothing runs on its own. You double-click one, watch its output, and it stops wh
 | `13-android-studio-and-sdk-caches.bat` | Studio index/caches/logs, SDK scratch dirs, `~\.android\cache` | Refuses while Studio is open. Reports SDK component sizes rather than guessing what is unused |
 | `14-android-emulator-snapshots.bat` | AVD Quick Boot snapshots and `/cache` | Apps and data survive; next launch is a cold boot. Confirms first |
 | `15-android-emulator-wipe-data.bat` | AVD `userdata`, snapshots, `/cache`, SD-card delta | **Factory-resets every emulator.** Confirms first |
+| `16-chrome-caches.bat` | Chrome HTTP/code/GPU/service-worker caches, every profile | Confirms, then closes Chrome. Cookies, passwords, history, bookmarks and tabs untouched |
+| `17-firefox-caches.bat` | Firefox `cache2`, `startupCache`, Cache API store, every profile | Confirms, then closes Firefox. Same guarantees |
 
 `_common.cmd` holds the shared prologue/epilogue and helpers: the UTF-8 code page, the free-space
 before/after summary, `rmdir` (refuses to touch a drive root), `dirsize` (for the "here is what is
-big, prune it yourself" reports), `running` (is an IDE or emulator holding these files open?) and
-`confirm` (the yes/no dialog). It is a `.cmd` rather than a `.bat` so the dialog, which globs
-`*.bat`, never offers it as a runnable script.
+big, prune it yourself" reports), `running` (is an IDE or emulator holding these files open?),
+`confirm` (the yes/no dialog), `close` (ask an app to shut down normally, then wait) and `kill`
+(force it). It is a `.cmd` rather than a `.bat` so the dialog, which globs `*.bat`, never offers it
+as a runnable script.
+
+`close` uses `taskkill` **without** `/f` — a WM_CLOSE, so a browser writes its session out and
+offers your tabs back on the next launch. It is best-effort: it returns non-zero if the process is
+still there afterwards, and every caller must handle that rather than plough on. A packaged app
+(Windows 11's Notepad, for one) will ignore WM_CLOSE indefinitely, as will any app showing a "save
+changes?" prompt.
 
 `confirm` and `dirsize` pass their text to PowerShell through **environment variables** rather than
 interpolating it into the command line. That is not stylistic: an apostrophe in the message
