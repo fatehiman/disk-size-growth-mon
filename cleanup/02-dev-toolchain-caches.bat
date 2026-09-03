@@ -35,12 +35,12 @@ call "%~dp0_common.cmd" rmdir "%LOCALAPPDATA%\uv\cache"
 call "%~dp0_common.cmd" rmdir "%LOCALAPPDATA%\pypoetry\Cache"
 
 echo.
-echo === Java / Gradle / Maven ===
-rem Gradle's build cache and downloaded distributions. The dependency cache
-rem (modules-2) is left alone: on a metered or offline machine re-downloading it
-rem is genuinely painful, and it is usually the smaller half anyway.
-call "%~dp0_common.cmd" rmdir "%USERPROFILE%\.gradle\caches\build-cache-1"
-call "%~dp0_common.cmd" rmdir "%USERPROFILE%\.gradle\daemon"
+echo === Java / Maven ===
+rem Gradle is not touched here. It is worth gigabytes on its own and needs the
+rem daemons stopped first, so it has its own pair of scripts:
+rem   11-gradle-caches.bat      derived caches, no re-download
+rem   12-gradle-deep-clean.bat  the downloads too
+echo   Gradle: see 11-gradle-caches.bat and 12-gradle-deep-clean.bat
 call "%~dp0_common.cmd" rmdir "%USERPROFILE%\.m2\repository\.cache"
 
 echo.

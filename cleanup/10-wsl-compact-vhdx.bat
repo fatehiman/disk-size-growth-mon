@@ -62,10 +62,7 @@ echo === confirm ===
 echo About to shut down ALL WSL distros and compact the %COUNT% disk^(s^) above.
 echo Anything running inside WSL, including Docker Desktop, will be stopped.
 echo A confirmation dialog has opened -- answer it to continue.
-rem A GUI prompt, not `set /p`: the app runs these scripts with stdin closed so
-rem that a script which reads input gets EOF instead of hanging forever, and
-rem `set /p` would therefore auto-answer "no" every time.
-powershell -NoProfile -NonInteractive -Command "Add-Type -AssemblyName System.Windows.Forms; $r=[System.Windows.Forms.MessageBox]::Show('Shut down all WSL distros and compact %COUNT% virtual disk(s)?' + [char]10 + [char]10 + 'Everything running inside WSL, Docker Desktop included, will be stopped.','Compact WSL disks','YesNo','Warning','Button2'); if($r -eq 'Yes'){exit 0} else {exit 1}"
+call "%~dp0_common.cmd" confirm "Shut down all WSL distros and compact %COUNT% virtual disk(s)?||Everything running inside WSL, Docker Desktop included, will be stopped." "Compact WSL disks"
 if errorlevel 1 (
     echo Cancelled -- nothing was changed.
     call "%~dp0_common.cmd" end

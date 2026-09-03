@@ -39,7 +39,7 @@ Think `du` on a schedule you control, with the diff already computed.
 - Shows a scan history; picking any past scan renders its report instantly (nothing is recomputed).
 - Right-click (or double-click) any report row to open that folder in Explorer, so you can go straight
   from "what grew" to doing something about it.
-- Runs **cleanup scripts** — plain `.bat` files sitting next to the exe, ten of them shipped — one at a
+- Runs **cleanup scripts** — plain `.bat` files sitting next to the exe, fifteen of them shipped — one at a
   time, with their output in front of you and a Kill button when one wedges.
 - Pause / stop mid-scan, a live log of what is being walked, single-instance enforcement, and a clean
   shutdown that leaves nothing running.
@@ -290,6 +290,8 @@ that runs the reclaiming half:
 │ │ cleanup\02-dev-toolchain-caches.bat                                   │ │
 │ │ cleanup\03-temp-files.bat                          ← double-click     │ │
 │ │ …                                                                     │ │
+│ │ cleanup\11-gradle-caches.bat                                          │ │
+│ │ cleanup\15-android-emulator-wipe-data.bat                             │ │
 │ └────────────────────────────────────────────────────────────────────────┘ │
 │ [Kill] [Refresh list] [Open folder] [Clear output] [Close]                 │
 │ ┌────────────────────────────────────────────────────────────────────────┐ │
@@ -328,8 +330,16 @@ that runs the reclaiming half:
 | `08-recycle-bin.bat` | The Recycle Bin, every drive | **The only one that can lose something you wanted.** Prints sizes first |
 | `09-docker-prune.bat` | Stopped containers, dangling images, build cache | No `--volumes`, no `-a` |
 | `10-wsl-compact-vhdx.bat` | Compacts WSL2 `ext4.vhdx` | Shuts down every distro. Confirms in a dialog first |
+| `11-gradle-caches.bat` | `~\.gradle\caches\*` except the downloads, daemon logs | Stops the daemons first. Costs one slower build, no re-download |
+| `12-gradle-deep-clean.bat` | `caches\modules-2`, `wrapper\dists` | Confirms first — this one costs a full dependency re-download |
+| `13-android-studio-and-sdk-caches.bat` | Studio index/caches/logs, SDK scratch, `~\.android\cache` | Refuses while Studio is open |
+| `14-android-emulator-snapshots.bat` | AVD Quick Boot snapshots and `/cache` | Apps and data survive; next launch is a cold boot. Confirms first |
+| `15-android-emulator-wipe-data.bat` | AVD `userdata`, snapshots, `/cache`, SD-card delta | **Factory-resets every emulator.** Confirms first |
 
-Every one of them is a cache that regenerates, with two deliberate exceptions called out in the table.
+Most are caches that regenerate; the exceptions are called out in the table and confirm in a dialog
+first. Scripts split into a safe half and a costly half — `11`/`12` for Gradle, `14`/`15` for the
+emulator — so the promptless one stays promptless.
+
 The lines *not* crossed are as much of the design as the lines that are:
 
 - **`node_modules`, `bin`, `obj`, `target`, `.venv` are never swept.** Deleting those breaks projects
@@ -343,13 +353,26 @@ The lines *not* crossed are as much of the design as the lines that are:
 - **Explorer is not restarted** to unlock the thumbnail cache. This runs elevated, and re-launching
   `explorer.exe` from an elevated process can bring the shell back at high integrity, quietly breaking
   drag-and-drop until the next logon. Locked cache files are reported and left instead.
+- **The Android SDK is measured, not pruned.** Old `build-tools`, extra `platforms` and unused
+  `system-images` are worth gigabytes, but "unused" is not something a script can work out — any AVD
+  or any project's `compileSdk` may need any of them. `13` prints the sizes and points at the SDK
+  Manager, which knows the dependency graph.
+- **Gradle's `modules-2` is left to its own script.** Derived caches cost a slower build; downloads
+  cost bandwidth and minutes. Different decisions, so different scripts.
 
-`_common.cmd` holds the shared prologue/epilogue: the UTF-8 code page, the free-space before/after
-summary, and an `rmdir` helper that refuses to touch a drive root. It is a `.cmd`, not a `.bat`, so
-the dialog — which globs `*.bat` — never offers it as something to run.
+`_common.cmd` holds the shared prologue/epilogue and helpers: the UTF-8 code page, the free-space
+before/after summary, `rmdir` (refuses to touch a drive root), `dirsize`, `running` (is an IDE or
+emulator holding these files open?) and `confirm` (the yes/no dialog). It is a `.cmd`, not a `.bat`,
+so the dialog — which globs `*.bat` — never offers it as something to run.
 
-Free space is reported in whole MB rather than bytes because `SET /A` is 32-bit signed, and a byte
-count on any modern disk overflows it.
+Two details that are load-bearing rather than stylistic:
+
+- Free space is reported in whole MB, not bytes, because `SET /A` is 32-bit signed and a byte count
+  on any modern disk overflows it.
+- `confirm` and `dirsize` pass their text to PowerShell through **environment variables** instead of
+  interpolating it into the command line. An apostrophe in the message (`Gradle's downloads`) closes
+  PowerShell's single-quoted string, the command dies with a parse error, and the non-zero exit reads
+  back as "the user said no" — so the script silently does nothing, every time.
 
 ### Writing your own
 
