@@ -12,9 +12,9 @@
     <RootNamespace>DiskSizeGrowthMon</RootNamespace>
     <Product>Disk Size Growth Monitor</Product>
     <Company>disk-size-growth-mon</Company>
-    <Version>1.0.1</Version>
-    <FileVersion>1.0.1.0</FileVersion>
-    <AssemblyVersion>1.0.1.0</AssemblyVersion>
+    <Version>1.1.0</Version>
+    <FileVersion>1.1.0.0</FileVersion>
+    <AssemblyVersion>1.1.0.0</AssemblyVersion>
 
     <!-- Requires elevation (see app.manifest) so system folders can be enumerated. -->
     <ApplicationManifest>app.manifest</ApplicationManifest>
@@ -45,6 +45,12 @@
     <None Update="config.default.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+  </ItemGroup>
+
+  <!-- The cleanup scripts ship as loose files in dist\cleanup\, not embedded: the whole point is
+       that you can read them before running them, and edit or add your own afterwards. -->
+  <ItemGroup>
+    <None Include="..\..\cleanup\**\*" LinkBase="cleanup" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

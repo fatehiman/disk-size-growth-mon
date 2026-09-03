@@ -20,6 +20,7 @@ Think `du` on a schedule you control, with the diff already computed.
 - [Configuration](#configuration)
 - [How scanning works](#how-scanning-works)
 - [How the growth report works](#how-the-growth-report-works)
+- [Cleanup scripts](#cleanup-scripts)
 - [Database](#database)
 - [Building from source](#building-from-source)
 - [Tests](#tests)
@@ -36,6 +37,10 @@ Think `du` on a schedule you control, with the diff already computed.
 - Stores each scan in SQLite and, the moment a scan finishes, **pre-computes** the growth report against
   the previous scan of that drive.
 - Shows a scan history; picking any past scan renders its report instantly (nothing is recomputed).
+- Right-click (or double-click) any report row to open that folder in Explorer, so you can go straight
+  from "what grew" to doing something about it.
+- Runs **cleanup scripts** — plain `.bat` files sitting next to the exe, ten of them shipped — one at a
+  time, with their output in front of you and a Kill button when one wedges.
 - Pause / stop mid-scan, a live log of what is being walked, single-instance enforcement, and a clean
   shutdown that leaves nothing running.
 
@@ -61,6 +66,7 @@ Grab `DiskSizeGrowthMon.exe` (or build it — see below) and drop it in a folder
 DiskSizeGrowthMon.exe     the app
 config.json               created on first run with defaults
 diskgrowth.db             SQLite database (plus -wal / -shm while running)
+cleanup\                  the shipped cleanup .bat files
 ```
 
 > Put it somewhere writable. `C:\Program Files` works because the app is elevated, but a plain folder
@@ -86,9 +92,9 @@ window — you press **Scan**.
 ```
 ┌─ Scan ─────────────────────────────────────────────────────────────────────┐
 │ ┌──────────────────────────────┐                                           │
-│ │ C:  Windows-SSD   12.3 GB …  │    ┌──────────┐   ┌──────────┐            │
-│ │ D:  data          56.1 GB …  │    │   Scan   │   │   Stop   │            │
-│ │ E:  storage       36.9 GB …  │    └──────────┘   └──────────┘            │
+│ │ C:  Windows-SSD   12.3 GB …  │  ┌────────┐ ┌────────┐ ┌───────────┐      │
+│ │ D:  data          56.1 GB …  │  │  Scan  │ │  Stop  │ │ Cleanup…  │      │
+│ │ E:  storage       36.9 GB …  │  └────────┘ └────────┘ └───────────┘      │
 │ └──────────────────────────────┘                                           │
 │ ┌────────────────────────────────────────────────────────────────────────┐ │
 │ │ C:\Users\me\AppData\Local\Docker                                       │ │
@@ -112,6 +118,9 @@ window — you press **Scan**.
 - The drive list shows every ready **fixed or removable** drive with its label and free/total space.
 - **Scan** starts a scan. While one is running the same button becomes **Pause**, then **Resume**.
 - **Stop** is disabled until a scan starts. Stopping **discards** the scan (see below).
+- **Cleanup…** opens the [cleanup dialog](#cleanup-scripts). It is disabled while a scan runs —
+  deleting files under a walk in progress yields folder sizes that are neither the before nor the
+  after state. Closing the dialog re-reads the drive list, so freed space shows up immediately.
 - The log keeps the last `LogMaxLines` lines; when it overflows it is trimmed back to `LogKeepLines`,
   so it never grows without bound. Every folder at or above `MaxDepth` gets a line; below that the log
   is sampled at ~7 lines/second, because deep trees produce tens of thousands of folders per second.
@@ -126,6 +135,24 @@ window — you press **Scan**.
 - The table is fixed-sort — largest growth first — and column headers are deliberately not clickable.
 - At most `MaxReportRows` (default 300) rows are stored and shown.
 - Growth cells are tinted: amber from 1 GB, red from 5 GB.
+
+**Acting on a row.** Right-click a report row for:
+
+| | |
+|---|---|
+| **Show in File Explorer** | the default — opens the parent folder with the target selected |
+| Open folder | opens the folder itself |
+| Open parent folder | one level up |
+| Open command prompt here | `cmd` with that folder as the working directory |
+| Copy path / Copy row | the path alone, or the whole row tab-separated for pasting into a spreadsheet |
+
+Double-click or Enter does the default action. Right-clicking first moves the selection to the row
+under the cursor, so the menu can never act on a row you did not aim at; on empty space below the
+last row no menu opens at all.
+
+A reported folder may well be gone by the time you click it — the report is a snapshot of a scan that
+could be days old, and cleaning up is the point of the tool — so "does not exist" is an ordinary
+outcome here, not an error.
 
 **Closing.** If a scan is running, closing asks for confirmation, then cancels the scan, waits for the
 walk thread to unwind, and only then exits — no orphaned threads or half-written database.
@@ -250,6 +277,97 @@ Which gives these rules:
 
 ---
 
+## Cleanup scripts
+
+Finding out that `AppData\Local\Docker` grew 13 GB is only half the job. **Cleanup…** opens a dialog
+that runs the reclaiming half:
+
+```
+┌─ Cleanup scripts ──────────────────────────────────────────────────────────┐
+│ Batch files in …\cleanup and beside the executable. Double-click to run.   │
+│ ┌────────────────────────────────────────────────────────────────────────┐ │
+│ │ cleanup\01-node-caches.bat                                            │ │
+│ │ cleanup\02-dev-toolchain-caches.bat                                   │ │
+│ │ cleanup\03-temp-files.bat                          ← double-click     │ │
+│ │ …                                                                     │ │
+│ └────────────────────────────────────────────────────────────────────────┘ │
+│ [Kill] [Refresh list] [Open folder] [Clear output] [Close]                 │
+│ ┌────────────────────────────────────────────────────────────────────────┐ │
+│ │ === cleanup\03-temp-files.bat  started 09:41:02 ===                    │ │
+│ │   emptying C:\Users\me\AppData\Local\Temp                              │ │
+│ │   keeping .net\                                                        │ │
+│ │ === finished in 00:00:11 — exit code 0 ===                             │ │
+│ └────────────────────────────────────────────────────────────────────────┘ │
+│ Running cleanup\03-temp-files.bat   elapsed 00:00:11   (Kill stops it)     │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+- The list is every `*.bat` in `cleanup\` and every `*.bat` sitting directly beside the exe. **Refresh
+  list** re-reads both; **Open folder** opens `cleanup\` so you can read a script before trusting it.
+- **Double-click** (or Enter) runs one. The list is **disabled** while it runs and re-enabled when the
+  script exits — two scripts clearing overlapping caches at once produce interleaved output nobody can
+  read and race each other over the same directories.
+- Output is streamed live from both stdout and stderr, and the script's exit code is printed when it
+  finishes.
+- **Kill** terminates the whole process tree, not just `cmd.exe`. That matters: the visible process is
+  the shell, and the work is being done by `dism` / `docker` / `diskpart` underneath it.
+- Closing the dialog with a script still running asks first, then kills it.
+- Scripts run **elevated**, because the app is. No second UAC prompt.
+
+### What ships
+
+| Script | Clears | Notes |
+|---|---|---|
+| `01-node-caches.bat` | npm, yarn, pnpm, bun, node-gyp, Electron download caches | `node_modules` is never touched |
+| `02-dev-toolchain-caches.bat` | NuGet/.NET, pip/uv/poetry, Gradle build cache, cargo registry, Go build cache | Leaves Gradle `modules-2` and the Go *module* cache alone |
+| `03-temp-files.bat` | `%TEMP%`, `C:\Windows\Temp`, crash dumps, WER reports, WinINet cache | Skips `%TEMP%\.net` |
+| `04-windows-update-cache.bat` | `SoftwareDistribution\Download`, Delivery Optimization, `catroot2` | Stops and restarts wuauserv / BITS / DoSvc / CryptSvc |
+| `05-windows-cleanmgr.bat` | Disk Cleanup, unattended, safe handlers only | Writes its own `StateFlags4242` |
+| `06-dism-component-store.bat` | Superseded WinSxS component versions | 5–20 min, silent while it works. No `/ResetBase` |
+| `07-shell-and-gpu-caches.bat` | Thumbnail, icon, font, D3D / NVIDIA / AMD / Intel shader caches | Does not restart Explorer |
+| `08-recycle-bin.bat` | The Recycle Bin, every drive | **The only one that can lose something you wanted.** Prints sizes first |
+| `09-docker-prune.bat` | Stopped containers, dangling images, build cache | No `--volumes`, no `-a` |
+| `10-wsl-compact-vhdx.bat` | Compacts WSL2 `ext4.vhdx` | Shuts down every distro. Confirms in a dialog first |
+
+Every one of them is a cache that regenerates, with two deliberate exceptions called out in the table.
+The lines *not* crossed are as much of the design as the lines that are:
+
+- **`node_modules`, `bin`, `obj`, `target`, `.venv` are never swept.** Deleting those breaks projects
+  until you reinstall, and a global sweep for them is how people lose work.
+- **No `dism /ResetBase`.** It frees a little more by making every installed update permanent — and
+  permanently un-uninstallable, so a bad update could no longer be rolled back.
+- **No `docker --volumes` and no `docker image prune -a`.** A named volume is where a database keeps
+  its data; losing one is not a cache miss.
+- **Windows.old and the ESD image are excluded from `cleanmgr`.** They are what "Previous
+  Installations" and "Reset This PC" need.
+- **Explorer is not restarted** to unlock the thumbnail cache. This runs elevated, and re-launching
+  `explorer.exe` from an elevated process can bring the shell back at high integrity, quietly breaking
+  drag-and-drop until the next logon. Locked cache files are reported and left instead.
+
+`_common.cmd` holds the shared prologue/epilogue: the UTF-8 code page, the free-space before/after
+summary, and an `rmdir` helper that refuses to touch a drive root. It is a `.cmd`, not a `.bat`, so
+the dialog — which globs `*.bat` — never offers it as something to run.
+
+Free space is reported in whole MB rather than bytes because `SET /A` is 32-bit signed, and a byte
+count on any modern disk overflows it.
+
+### Writing your own
+
+Any `.bat` you drop in `cleanup\` or beside the exe appears in the list. Two things about how the app
+runs them:
+
+- **stdin is closed**, so a script that reads input gets EOF instead of hanging forever. `set /p` and
+  `pause` return immediately, and `timeout` refuses to run at all — use
+  `ping -n <seconds+1> 127.0.0.1 > nul` to sleep. For a real prompt, pop a dialog the way
+  `10-wsl-compact-vhdx.bat` does.
+- **Output is decoded as UTF-8.** Start with `chcp 65001 > nul`, or
+  `call "%~dp0_common.cmd" begin "description"`, which does that and prints the header.
+
+`cmd` is started with `/d`, which skips any AutoRun registry command that would otherwise inject
+noise into the captured output.
+
+---
+
 ## Database
 
 SQLite via [`Microsoft.Data.Sqlite`](https://learn.microsoft.com/dotnet/standard/data/sqlite/), WAL
@@ -347,16 +465,22 @@ one ~64 MB `.exe` with no runtime prerequisite.
 ```
 src/DiskSizeGrowthMon/
     Program.cs           entry point, single-instance mutex, elevation check
-    MainForm.cs          the entire UI, built in code (no designer file)
+    MainForm.cs          the main window, built in code (no designer file)
+    CleanupForm.cs       the cleanup dialog: script list, output capture, kill
+    PathActions.cs       opening report paths in Explorer / a prompt
     DiskScanner.cs       the walk
     Database.cs          schema, persistence, report generation
     AppConfig.cs         config.json load / create / validate
     Models.cs            FolderSize, ReportRow, ScanSummary
     PauseController.cs   the pause gate
     app.manifest         requireAdministrator, longPathAware
+cleanup/                 the shipped .bat files, copied to dist\cleanup\
 tests/SmokeTests/        end-to-end assertions over the non-UI code
 build.ps1
 ```
+
+The cleanup scripts are published as loose files rather than embedded resources on purpose: the point
+is that you can read one before running it, and edit or add your own afterwards.
 
 The UI is built in code rather than with a `.Designer.cs` file — it is one window with a fixed layout,
 and a hand-written `TableLayoutPanel` tree diffs far better in git than designer-generated markup.
@@ -374,7 +498,11 @@ synthetic tree (including a self-referencing junction), depth capping and roll-u
 new/shrunk/unchanged folder handling, rank ordering, history linkage, retention, and cancellation.
 Exit code is non-zero if anything fails, so `build.ps1` refuses to publish a broken build.
 
-There is no UI test framework here; the window is verified by rendering it offscreen during development.
+There is no UI test framework here; the window is verified by rendering it offscreen during
+development. The cleanup dialog and the shipped scripts are likewise not covered by the smoke tests —
+they act on the real machine, which is precisely what a test must not do. The batch helpers with
+non-obvious semantics (the `%TEMP%\.net` exclusion, deleting hidden cache files, refusing a drive
+root) were verified by hand against scratch directories.
 
 ---
 
@@ -409,7 +537,11 @@ incomplete, it is wrong, and it would poison the next comparison as well.
 - Config is read at startup only.
 - The report compares consecutive scans. "Growing gradually over two weeks" needs a query against the
   database — there is one ready to paste [above](#poking-at-it-yourself).
-- No CSV/HTML export from the UI yet.
+- No CSV/HTML export from the UI yet; **Copy row** on a report row is the stopgap.
+- The cleanup dialog runs one script at a time and has no scheduling, no dry-run mode, and no
+  per-script size estimate before it runs.
+- The report is not refreshed after a cleanup — the numbers you are looking at belong to the scan that
+  produced them. Scan again to see the effect.
 - x64 only in the published artifact; `build.ps1 -Runtime win-arm64` produces an ARM64 build.
 
 ---

@@ -16,6 +16,7 @@ public sealed class MainForm : Form
     private ListBox _lstDrives = null!;
     private Button _btnScan = null!;
     private Button _btnStop = null!;
+    private Button _btnCleanup = null!;
     private TextBox _txtLog = null!;
     private Label _lblStatus = null!;
 
@@ -117,8 +118,12 @@ public sealed class MainForm : Form
         _btnStop = new Button { Text = "Stop", Size = new Size(110, 34), Enabled = false, Margin = new Padding(8, 3, 3, 3) };
         _btnStop.Click += OnStopClick;
 
+        _btnCleanup = new Button { Text = "Cleanup…", Size = new Size(110, 34), Margin = new Padding(8, 3, 3, 3) };
+        _btnCleanup.Click += OnCleanupClick;
+
         buttons.Controls.Add(_btnScan);
         buttons.Controls.Add(_btnStop);
+        buttons.Controls.Add(_btnCleanup);
 
         topRow.Controls.Add(buttons);
         topRow.Controls.Add(_lstDrives);
@@ -176,6 +181,7 @@ public sealed class MainForm : Form
         };
 
         _grid = BuildGrid(monospace);
+        AttachRowActions(_grid);
 
         split.Panel2.Controls.Add(_grid);
         split.Panel2.Controls.Add(_lblReportHeader);
@@ -243,8 +249,119 @@ public sealed class MainForm : Form
         return grid;
     }
 
+    // ------------------------------------------------------------------ report row actions
+
+    /// <summary>
+    /// Right-click menu and double-click on a report row, both acting on that row's folder.
+    /// Right-clicking also moves the selection to the row under the cursor first, so the menu can
+    /// never act on a different row than the one you aimed at.
+    /// </summary>
+    private void AttachRowActions(DataGridView grid)
+    {
+        var menu = new ContextMenuStrip();
+
+        var miReveal = new ToolStripMenuItem("Show in File Explorer");
+        miReveal.Click += (_, _) => WithSelectedPath(p => PathActions.RevealInExplorer(this, p));
+
+        var miOpen = new ToolStripMenuItem("Open folder");
+        miOpen.Click += (_, _) => WithSelectedPath(p => PathActions.OpenFolder(this, p));
+
+        var miParent = new ToolStripMenuItem("Open parent folder");
+        miParent.Click += (_, _) => WithSelectedPath(p =>
+        {
+            string? parent = Path.GetDirectoryName(p);
+            if (string.IsNullOrEmpty(parent)) PathActions.OpenFolder(this, p);
+            else PathActions.OpenFolder(this, parent);
+        });
+
+        var miTerminal = new ToolStripMenuItem("Open command prompt here");
+        miTerminal.Click += (_, _) => WithSelectedPath(p => PathActions.OpenTerminalAt(this, p));
+
+        var miCopy = new ToolStripMenuItem("Copy path");
+        miCopy.Click += (_, _) => WithSelectedPath(p => PathActions.CopyToClipboard(this, p));
+
+        var miCopyRow = new ToolStripMenuItem("Copy row");
+        miCopyRow.Click += (_, _) => CopySelectedRow();
+
+        menu.Items.AddRange(new ToolStripItem[]
+        {
+            miReveal, miOpen, miParent, miTerminal,
+            new ToolStripSeparator(), miCopy, miCopyRow
+        });
+
+        // Default action, so the menu's first item and a double-click agree.
+        miReveal.Font = new Font(menu.Font, FontStyle.Bold);
+
+        grid.ContextMenuStrip = menu;
+
+        grid.CellMouseDown += (_, e) =>
+        {
+            if (e.Button != MouseButtons.Right) return;
+            if (e.RowIndex < 0 || e.RowIndex >= grid.Rows.Count) return;
+            grid.CurrentCell = grid.Rows[e.RowIndex].Cells[e.ColumnIndex < 0 ? 1 : e.ColumnIndex];
+        };
+
+        grid.CellDoubleClick += (_, e) =>
+        {
+            if (e.RowIndex < 0) return;
+            WithSelectedPath(p => PathActions.RevealInExplorer(this, p));
+        };
+
+        // Enter on the focused row does the same thing, and is suppressed so the grid does not
+        // also move the selection down a row.
+        grid.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode is not Keys.Enter) return;
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+            WithSelectedPath(p => PathActions.RevealInExplorer(this, p));
+        };
+
+        // A right-click on empty space below the last row would otherwise show a menu that acts on
+        // whatever was selected before, which reads as a misfire.
+        menu.Opening += (_, e) =>
+        {
+            bool haveRow = SelectedReportPath() is not null;
+            e.Cancel = !haveRow;
+        };
+    }
+
+    private string? SelectedReportPath()
+    {
+        DataGridViewRow? row = _grid.CurrentRow;
+        if (row is null || row.Index < 0) return null;
+        string? path = row.Cells["path"].Value as string;
+        return string.IsNullOrWhiteSpace(path) ? null : path;
+    }
+
+    private void WithSelectedPath(Action<string> action)
+    {
+        if (SelectedReportPath() is string path) action(path);
+    }
+
+    private void CopySelectedRow()
+    {
+        DataGridViewRow? row = _grid.CurrentRow;
+        if (row is null || row.Index < 0) return;
+
+        // Tab-separated, so it pastes into Excel as columns.
+        string text = string.Join('\t', row.Cells.Cast<DataGridViewCell>().Select(c => c.Value?.ToString() ?? ""));
+        PathActions.CopyToClipboard(this, text);
+    }
+
+    // ------------------------------------------------------------------ cleanup
+
+    private void OnCleanupClick(object? sender, EventArgs e)
+    {
+        using var dlg = new CleanupForm();
+        dlg.ShowDialog(this);
+        LoadDrives();   // a cleanup that freed space should show up in the drive list right away
+    }
+
     private void LoadDrives()
     {
+        string? previous = (_lstDrives.SelectedItem as DriveItem)?.Letter;
+
         _lstDrives.BeginUpdate();
         _lstDrives.Items.Clear();
         foreach (var d in DriveInfo.GetDrives())
@@ -261,7 +378,23 @@ public sealed class MainForm : Form
             }
         }
         _lstDrives.EndUpdate();
-        if (_lstDrives.Items.Count > 0) _lstDrives.SelectedIndex = 0;
+        if (_lstDrives.Items.Count == 0) return;
+
+        // Reloading after a cleanup must not silently move the selection to another drive.
+        int index = 0;
+        if (previous is not null)
+        {
+            for (int i = 0; i < _lstDrives.Items.Count; i++)
+            {
+                if (_lstDrives.Items[i] is DriveItem d &&
+                    string.Equals(d.Letter, previous, StringComparison.OrdinalIgnoreCase))
+                {
+                    index = i;
+                    break;
+                }
+            }
+        }
+        _lstDrives.SelectedIndex = index;
     }
 
     private sealed class DriveItem
@@ -373,7 +506,7 @@ public sealed class MainForm : Form
         {
             // A half-finished walk has wrong folder sizes, which would corrupt the *next*
             // comparison as well. Discard rather than store something misleading.
-            AppendLogLine($"=== Stopped by user after {Format(_elapsed)}. Nothing was saved â€” " +
+            AppendLogLine($"=== Stopped by user after {Format(_elapsed)}. Nothing was saved — " +
                           "a partial scan cannot be compared meaningfully. ===");
         }
         else if (failure is not null)
@@ -439,6 +572,7 @@ public sealed class MainForm : Form
             _btnScan.Text = "Scan";
             _btnScan.Enabled = _lstDrives.SelectedItem is DriveItem && !_shuttingDown;
             _btnStop.Enabled = false;
+            _btnCleanup.Enabled = !_shuttingDown;
             _lstDrives.Enabled = !_shuttingDown;
         }
         else
@@ -446,13 +580,16 @@ public sealed class MainForm : Form
             _btnScan.Text = _pause is { IsPaused: true } ? "Resume" : "Pause";
             _btnScan.Enabled = true;
             _btnStop.Enabled = true;
+            // Deleting files under a walk in progress produces folder sizes that are neither the
+            // before nor the after state, so cleanup waits until the scan is done.
+            _btnCleanup.Enabled = false;
             _lstDrives.Enabled = false;
         }
     }
 
     // ------------------------------------------------------------------ log
 
-    /// <summary>Called from the scan thread â€” must stay allocation-light and never block.</summary>
+    /// <summary>Called from the scan thread — must stay allocation-light and never block.</summary>
     private void EnqueueLog(string line)
     {
         if (Volatile.Read(ref _logQueueDepth) >= LogQueueCap) return;  // UI fell behind; drop
@@ -541,7 +678,7 @@ public sealed class MainForm : Form
 
         if (_lstScans.Items.Count == 0)
         {
-            _lblReportHeader.Text = "No scans yet â€” pick a drive above and press Scan.";
+            _lblReportHeader.Text = "No scans yet — pick a drive above and press Scan.";
             _grid.Rows.Clear();
             return;
         }
@@ -574,7 +711,7 @@ public sealed class MainForm : Form
         _lblReportHeader.Text = scan.PrevStartedLocal is DateTime prev
             ? $"{scan.Drive}  \u2022  {scan.StartedLocal:yyyy-MM-dd HH:mm}  vs  {prev:yyyy-MM-dd HH:mm}  \u2022  " +
               $"{rows.Count} growing folder(s)  \u2022  drive total {scan.TotalBytes / GB:F1} GB" + free
-            : $"{scan.Drive}  \u2022  {scan.StartedLocal:yyyy-MM-dd HH:mm}  \u2022  FIRST SCAN of this drive â€” " +
+            : $"{scan.Drive}  \u2022  {scan.StartedLocal:yyyy-MM-dd HH:mm}  \u2022  FIRST SCAN of this drive — " +
               $"every folder is compared against 0, so this is a baseline, not real growth." + free;
 
         _grid.SuspendLayout();
@@ -634,6 +771,7 @@ public sealed class MainForm : Form
         _shuttingDown = true;
         _btnScan.Enabled = false;
         _btnStop.Enabled = false;
+        _btnCleanup.Enabled = false;
         _lblStatus.Text = "Stopping scan, please wait\u2026";
         UseWaitCursor = true;
 
