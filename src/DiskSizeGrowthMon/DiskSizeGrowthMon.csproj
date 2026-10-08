@@ -12,9 +12,9 @@
     <RootNamespace>DiskSizeGrowthMon</RootNamespace>
     <Product>Disk Size Growth Monitor</Product>
     <Company>disk-size-growth-mon</Company>
-    <Version>1.3.0</Version>
-    <FileVersion>1.3.0.0</FileVersion>
-    <AssemblyVersion>1.3.0.0</AssemblyVersion>
+    <Version>1.4.0</Version>
+    <FileVersion>1.4.0.0</FileVersion>
+    <AssemblyVersion>1.4.0.0</AssemblyVersion>
 
     <!-- Requires elevation (see app.manifest) so system folders can be enumerated. -->
     <ApplicationManifest>app.manifest</ApplicationManifest>

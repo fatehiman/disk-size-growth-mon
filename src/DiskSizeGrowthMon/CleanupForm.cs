@@ -6,25 +6,33 @@ namespace DiskSizeGrowthMon;
 /// <summary>
 /// Runs the cleanup batch files that ship next to the executable.
 ///
-/// One script at a time, by design: two scripts clearing overlapping caches in parallel produce
-/// interleaved output nobody can read and race each other over the same directories. The list is
-/// disabled while a script runs and re-enabled when it exits.
+/// Tick any number of scripts and press Run: they execute one after another, never in parallel -
+/// two scripts clearing overlapping caches at once produce interleaved output nobody can read and
+/// race each other over the same directories. Run turns into Stop while the queue is going.
+/// Free space on every fixed volume is measured before and after, so the reclaimed total is
+/// real even when a folder on C: is a mount point for a volume that lives on E:.
 /// </summary>
 public sealed class CleanupForm : Form
 {
     /// <summary>Subfolder beside the exe that holds the shipped scripts. Its .bat files are listed too.</summary>
     public const string ScriptSubfolder = "cleanup";
 
-    private ListBox _lstScripts = null!;
+    private CheckedListBox _lstScripts = null!;
+    private CheckBox _chkAll = null!;
+    private bool _syncingAll;
     private TextBox _txtOutput = null!;
-    private Button _btnKill = null!;
+    private Button _btnRun = null!;
     private Button _btnRefresh = null!;
     private Button _btnClose = null!;
     private Label _lblStatus = null!;
 
     private Process? _proc;
     private Stopwatch? _elapsed;
-    private bool _killRequested;
+    private bool _running;           // a queue is in progress
+    private bool _stopRequested;
+    private int _queueIndex, _queueCount;
+    private string _queueName = "";
+    private string _lastSummary = "";
 
     // cmd.exe spawns children (dism, docker, diskpart...), so the whole tree is written to a job-like
     // taskkill /T. Output arrives on two background threads; every touch of the UI goes through Invoke.
@@ -59,22 +67,26 @@ public sealed class CleanupForm : Form
             Padding = new Padding(10)
         };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 170f));   // script list
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 196f));   // script list
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 38f));    // button strip
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));    // output
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 24f));    // status
 
-        _lstScripts = new ListBox
+        _lstScripts = new CheckedListBox
         {
             Dock = DockStyle.Fill,
             Font = monospace,
             IntegralHeight = false,
-            SelectionMode = SelectionMode.One
+            CheckOnClick = true
         };
-        _lstScripts.DoubleClick += (_, _) => RunSelected();
-        _lstScripts.KeyDown += (_, e) =>
+        // ItemCheck fires before the new state is stored, so look at it once the event has finished.
+        _lstScripts.ItemCheck += (_, _) => BeginInvoke(SyncSelectAll);
+
+        _chkAll = new CheckBox { Text = "Select all", Dock = DockStyle.Top, Height = 24, Padding = new Padding(4, 0, 0, 0) };
+        _chkAll.CheckedChanged += (_, _) =>
         {
-            if (e.KeyCode is Keys.Enter) { e.Handled = true; RunSelected(); }
+            if (_syncingAll) return;
+            for (int i = 0; i < _lstScripts.Items.Count; i++) _lstScripts.SetItemChecked(i, _chkAll.Checked);
         };
 
         var strip = new FlowLayoutPanel
@@ -85,8 +97,8 @@ public sealed class CleanupForm : Form
             Padding = new Padding(0, 4, 0, 0)
         };
 
-        _btnKill = new Button { Text = "Kill", Size = new Size(70, 26), Enabled = false };
-        _btnKill.Click += (_, _) => KillRunning();
+        _btnRun = new Button { Text = "Run", Size = new Size(80, 26) };
+        _btnRun.Click += (_, _) => { if (_running) StopQueue(); else _ = RunCheckedAsync(); };
 
         _btnRefresh = new Button { Text = "Refresh list", Size = new Size(100, 26), Margin = new Padding(8, 3, 3, 3) };
         _btnRefresh.Click += (_, _) => LoadScripts();
@@ -100,7 +112,7 @@ public sealed class CleanupForm : Form
         _btnClose = new Button { Text = "Close", Size = new Size(80, 26), Margin = new Padding(8, 3, 3, 3) };
         _btnClose.Click += (_, _) => Close();
 
-        strip.Controls.AddRange(new Control[] { _btnKill, _btnRefresh, btnFolder, btnClear, _btnClose });
+        strip.Controls.AddRange(new Control[] { _btnRun, _btnRefresh, btnFolder, btnClear, _btnClose });
 
         _txtOutput = new TextBox
         {
@@ -119,19 +131,20 @@ public sealed class CleanupForm : Form
         {
             Dock = DockStyle.Fill,
             TextAlign = ContentAlignment.MiddleLeft,
-            Text = "Double-click a script to run it."
+            Text = "Tick the scripts to run, then press Run."
         };
 
         var lblHint = new Label
         {
             Dock = DockStyle.Top,
             Height = 20,
-            Text = $"Batch files in {ScriptFolder} and beside the executable. Double-click to run — they run elevated.",
+            Text = $"Batch files in {ScriptFolder} and beside the executable. Ticked ones run one by one, elevated.",
             ForeColor = SystemColors.GrayText
         };
 
         var listPanel = new Panel { Dock = DockStyle.Fill };
         listPanel.Controls.Add(_lstScripts);
+        listPanel.Controls.Add(_chkAll);
         listPanel.Controls.Add(lblHint);
 
         root.Controls.Add(listPanel, 0, 0);
@@ -156,9 +169,10 @@ public sealed class CleanupForm : Form
 
     private void LoadScripts()
     {
-        if (IsRunning) return;
+        if (_running) return;
 
-        string? previous = (_lstScripts.SelectedItem as ScriptItem)?.FullPath;
+        var previouslyChecked = _lstScripts.CheckedItems.OfType<ScriptItem>()
+            .Select(i => i.FullPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         var found = new List<ScriptItem>();
         // The cleanup\ subfolder first (that is where the shipped scripts live), then any loose
@@ -168,19 +182,13 @@ public sealed class CleanupForm : Form
 
         _lstScripts.BeginUpdate();
         _lstScripts.Items.Clear();
-        foreach (var s in found) _lstScripts.Items.Add(s);
+        foreach (var item in found) _lstScripts.Items.Add(item, previouslyChecked.Contains(item.FullPath));
         _lstScripts.EndUpdate();
+        SyncSelectAll();
 
-        if (_lstScripts.Items.Count == 0)
-        {
-            _lblStatus.Text = $"No .bat files found in {ScriptFolder} or {ExeFolder}.";
-            return;
-        }
-
-        int index = previous is null ? 0 : found.FindIndex(s =>
-            string.Equals(s.FullPath, previous, StringComparison.OrdinalIgnoreCase));
-        _lstScripts.SelectedIndex = index < 0 ? 0 : index;
-        _lblStatus.Text = $"{_lstScripts.Items.Count} script(s). Double-click one to run it.";
+        _lblStatus.Text = _lstScripts.Items.Count == 0
+            ? $"No .bat files found in {ScriptFolder} or {ExeFolder}."
+            : $"{_lstScripts.Items.Count} script(s). Tick the ones to run, then press Run.";
 
         void Collect(string folder, string prefix)
         {
@@ -202,19 +210,109 @@ public sealed class CleanupForm : Form
 
     // ------------------------------------------------------------------ running
 
-    private bool IsRunning => _proc is { HasExited: false };
-
-    private void RunSelected()
+    private void SyncSelectAll()
     {
-        if (IsRunning) return;
-        if (_lstScripts.SelectedItem is not ScriptItem script) return;
-        if (!File.Exists(script.FullPath))
+        if (IsDisposed) return;
+        _syncingAll = true;
+        _chkAll.Checked = _lstScripts.Items.Count > 0 && _lstScripts.CheckedItems.Count == _lstScripts.Items.Count;
+        _syncingAll = false;
+    }
+
+    private async Task RunCheckedAsync()
+    {
+        var queue = _lstScripts.CheckedItems.OfType<ScriptItem>().ToList();
+        if (queue.Count == 0)
         {
-            MessageBox.Show(this, $"{script.FullPath} no longer exists.", AppConfig.AppTitle,
-                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            LoadScripts();
+            MessageBox.Show(this, "Tick at least one script first.", AppConfig.AppTitle,
+                            MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
+
+        _running = true;
+        _stopRequested = false;
+        _queueCount = queue.Count;
+        _queueIndex = 0;
+        _queueName = "";
+        _elapsed = Stopwatch.StartNew();
+        SetRunningUi(true);
+
+        var before = VolumeSpace.Snapshot();
+        Append($"##### queue of {queue.Count} script(s) started {DateTime.Now:HH:mm:ss} #####");
+
+        int ran = 0, failed = 0;
+        var perScript = new List<(string Name, long Gain, int Exit)>();
+
+        foreach (var script in queue)
+        {
+            if (_stopRequested || IsDisposed) break;
+
+            _queueIndex = ran + 1;
+            _queueName = script.Display;
+
+            if (!File.Exists(script.FullPath))
+            {
+                Append($"=== {script.Display} no longer exists - skipped ===");
+                failed++;
+                continue;
+            }
+
+            long freeBefore = VolumeSpace.TotalFree(VolumeSpace.Snapshot());
+            int exit = await RunScriptAsync(script, ran + 1, queue.Count);
+            if (IsDisposed) return;
+            long gain = VolumeSpace.TotalFree(VolumeSpace.Snapshot()) - freeBefore;
+
+            ran++;
+            if (exit != 0 && !_stopRequested) failed++;
+            perScript.Add((script.Display, gain, exit));
+        }
+
+        if (IsDisposed) return;
+        var after = VolumeSpace.Snapshot();
+
+        PrintSummary(queue.Count, ran, failed, perScript, VolumeSpace.Compare(before, after));
+
+        _running = false;
+        _elapsed?.Stop();
+        SetRunningUi(false);
+    }
+
+    private void PrintSummary(int total, int ran, int failed,
+                              List<(string Name, long Gain, int Exit)> perScript,
+                              List<VolumeSpace.Change> changes)
+    {
+        long totalDelta = changes.Sum(c => c.Delta);
+        var sb = new StringBuilder();
+        sb.AppendLine();
+        sb.AppendLine("################ SUMMARY ################");
+        sb.AppendLine(_stopRequested
+            ? $"Stopped by user: {ran} of {total} script(s) started, {failed} reported a problem."
+            : $"{ran} of {total} script(s) ran, {failed} reported a problem.");
+
+        sb.AppendLine();
+        sb.AppendLine("Free space change per script (all volumes together):");
+        foreach (var (name, gain, exit) in perScript)
+            sb.AppendLine($"  {VolumeSpace.SignedGb(gain),14}  {name}{(exit != 0 ? $"   (exit {exit})" : "")}");
+
+        sb.AppendLine();
+        sb.AppendLine("Free space per volume, before -> after:");
+        foreach (var c in changes)
+            sb.AppendLine($"  {c.Name,-10} {VolumeSpace.Gb(c.BeforeBytes),10} GB -> {VolumeSpace.Gb(c.AfterBytes),10} GB   {VolumeSpace.SignedGb(c.Delta)}");
+
+        sb.AppendLine();
+        sb.AppendLine($"TOTAL RECLAIMED: {VolumeSpace.SignedGb(totalDelta)}");
+        sb.AppendLine("Net change in free space over every fixed volume. Other programs write while the");
+        sb.AppendLine("scripts run, and a move between volumes (e.g. C: to E:) nets to about zero.");
+        sb.AppendLine("#########################################");
+        Append(sb.ToString());
+
+        _lastSummary = $"Last run: {VolumeSpace.SignedGb(totalDelta)} in total " +
+                       $"(free {VolumeSpace.Gb(changes.Sum(c => c.BeforeBytes))} -> {VolumeSpace.Gb(changes.Sum(c => c.AfterBytes))} GB, all volumes).";
+    }
+
+    /// <summary>Runs one script to the end and returns its exit code (-1 if it was killed or failed to start).</summary>
+    private Task<int> RunScriptAsync(ScriptItem script, int index, int count)
+    {
+        var tcs = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         var psi = new ProcessStartInfo
         {
@@ -234,34 +332,33 @@ public sealed class CleanupForm : Form
         // above correct. A user's own .bat that does not will still be readable for plain ASCII output.
 
         Process proc;
+        var sw = Stopwatch.StartNew();
         try
         {
             proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
             proc.OutputDataReceived += (_, e) => { if (e.Data is not null) AppendThreadSafe(e.Data); };
             proc.ErrorDataReceived += (_, e) => { if (e.Data is not null) AppendThreadSafe(e.Data); };
-            proc.Exited += (_, _) => OnProcessExited(proc);
+            proc.Exited += (_, _) => OnProcessExited(proc, script, sw, tcs);
 
             if (!proc.Start()) throw new InvalidOperationException("cmd.exe did not start.");
         }
         catch (Exception ex)
         {
             Append($"=== Could not start {script.Display}: {ex.Message} ===");
-            return;
+            tcs.TrySetResult(-1);
+            return tcs.Task;
         }
 
         _proc = proc;
-        _killRequested = false;
-        _elapsed = Stopwatch.StartNew();
-
         proc.BeginOutputReadLine();
         proc.BeginErrorReadLine();
         try { proc.StandardInput.Close(); } catch { /* already gone */ }
 
-        Append($"=== {script.Display}  started {DateTime.Now:HH:mm:ss} ===");
-        SetRunningUi(true);
+        Append($"=== [{index}/{count}] {script.Display}  started {DateTime.Now:HH:mm:ss} ===");
+        return tcs.Task;
     }
 
-    private void OnProcessExited(Process proc)
+    private void OnProcessExited(Process proc, ScriptItem script, Stopwatch sw, TaskCompletionSource<int> tcs)
     {
         // Exited fires on a thread-pool thread; WaitForExit() with no timeout here flushes the two
         // async output readers, so nothing is lost between the last line and the summary below.
@@ -272,28 +369,32 @@ public sealed class CleanupForm : Form
 
         void Finish()
         {
-            _elapsed?.Stop();
-            string how = _killRequested ? "killed by user" : $"exit code {exitCode}";
-            Append($"=== finished in {_elapsed?.Elapsed:hh\\:mm\\:ss} — {how} ===");
+            string how = _stopRequested ? "stopped by user" : $"exit code {exitCode}";
+            Append($"=== {script.Display} finished in {sw.Elapsed:hh\\:mm\\:ss} - {how} ===");
             Append("");
 
             _proc = null;
-            SetRunningUi(false);
             try { proc.Dispose(); } catch { /* ignore */ }
+            tcs.TrySetResult(_stopRequested ? -1 : exitCode);
         }
 
         if (IsDisposed || !IsHandleCreated) return;
         try { BeginInvoke(Finish); } catch (ObjectDisposedException) { /* form closed under us */ }
     }
 
+    private void StopQueue()
+    {
+        _stopRequested = true;
+        _btnRun.Enabled = false;
+        _btnRun.Text = "Stopping...";
+        Append("=== stop requested - terminating the current script and skipping the rest ===");
+        KillRunning();
+    }
+
     private void KillRunning()
     {
         Process? proc = _proc;
         if (proc is null || proc.HasExited) return;
-
-        _killRequested = true;
-        _btnKill.Enabled = false;
-        Append("=== kill requested — terminating the script and everything it started ===");
 
         // Kill(true) walks the child tree, which matters: the visible process is cmd.exe and the
         // work is being done by dism / docker / diskpart underneath it.
@@ -304,28 +405,29 @@ public sealed class CleanupForm : Form
         catch (Exception ex)
         {
             Append($"[kill failed: {ex.Message}]");
-            _btnKill.Enabled = true;
         }
     }
 
     private void SetRunningUi(bool running)
     {
-        _lstScripts.Enabled = !running;   // one script at a time
+        _lstScripts.Enabled = !running;   // one queue at a time
+        _chkAll.Enabled = !running;
         _btnRefresh.Enabled = !running;
-        _btnKill.Enabled = running;
+        _btnRun.Enabled = true;
+        _btnRun.Text = running ? "Stop" : "Run";
         if (!running) UpdateStatus();
     }
 
     private void UpdateStatus()
     {
-        if (!IsRunning)
+        if (!_running)
         {
-            if (_elapsed is not null) _lblStatus.Text = "Idle. Double-click a script to run it.";
+            if (_elapsed is not null)
+                _lblStatus.Text = _lastSummary.Length > 0 ? _lastSummary : "Idle. Tick scripts and press Run.";
             return;
         }
 
-        string name = (_lstScripts.SelectedItem as ScriptItem)?.Display ?? "script";
-        _lblStatus.Text = $"Running {name}   elapsed {_elapsed?.Elapsed:hh\\:mm\\:ss}   (Kill stops it)";
+        _lblStatus.Text = $"Running {_queueIndex} of {_queueCount}: {_queueName}   elapsed {_elapsed?.Elapsed:hh\\:mm\\:ss}   (Stop ends it and skips the rest)";
     }
 
     // ------------------------------------------------------------------ output
@@ -346,11 +448,11 @@ public sealed class CleanupForm : Form
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
-        if (IsRunning)
+        if (_running)
         {
             var answer = MessageBox.Show(
                 this,
-                "A cleanup script is still running.\r\n\r\nKill it and close this window?",
+                "Cleanup scripts are still running.\r\n\r\nStop them and close this window?",
                 AppConfig.AppTitle, MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2);
 
             if (answer != DialogResult.Yes)
@@ -359,6 +461,7 @@ public sealed class CleanupForm : Form
                 return;
             }
 
+            _stopRequested = true;
             KillRunning();
         }
 

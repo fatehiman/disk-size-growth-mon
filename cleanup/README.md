@@ -4,7 +4,8 @@ The batch files the app's **Cleanup…** dialog lists and runs. They are publish
 `dist\cleanup\` next to `DiskSizeGrowthMon.exe`, and the dialog also lists any `*.bat` you drop
 directly beside the exe.
 
-Nothing runs on its own. You double-click one, watch its output, and it stops when it stops.
+Nothing runs on its own. You tick one or more, press **Run**, and they run one after another. **Stop** ends the queue.
+When the queue finishes, the dialog prints how much free space was gained on all fixed volumes.
 
 | Script | What it clears | Notes |
 |---|---|---|
@@ -25,6 +26,11 @@ Nothing runs on its own. You double-click one, watch its output, and it stops wh
 | `15-android-emulator-wipe-data.bat` | AVD `userdata`, snapshots, `/cache`, SD-card delta | **Factory-resets every emulator.** Confirms first |
 | `16-chrome-caches.bat` | Chrome HTTP/code/GPU/service-worker caches, every profile | Confirms, then closes Chrome. Cookies, passwords, history, bookmarks and tabs untouched |
 | `17-firefox-caches.bat` | Firefox `cache2`, `startupCache`, Cache API store, every profile | Confirms, then closes Firefox. Same guarantees |
+| `18-webappshield-test-leftovers.bat` | `%TEMP%\.net` and `%LOCALAPPDATA%\WinWebAppShield` per-run folders left by win-webapp-shield's `smoke-test.ps1` | No exclusions by name — a folder still in use is simply skipped |
+| `19-stale-store-app-versions.bat` | Superseded versions left in `C:\Program Files\WindowsApps` after a Store app updates | Removes a version only when nobody has it installed **and** a newer one is. A pending update is never touched |
+| `20-leftover-installers.bat` | Setup payloads updaters downloaded, installed from, and kept — Ollama, LM Studio, Insomnia, VMware, NVIDIA, `MSOCache`, `Windows\Panther` | Leaves `ProgramData\Package Cache` and `Windows\Installer` alone: repair and uninstall read those back |
+| `21-reserved-storage-and-winsxs-reset.bat` | Reserved storage, then `/StartComponentCleanup /ResetBase` | Each costs something, which is why `06-` does neither. Asks separately. After `/ResetBase` the updates you have **now** can no longer be uninstalled |
+| `22-move-dev-caches-to-e.bat` | **Moves** `.gradle`, `.cache`, `.android` and `ms-playwright` to `E:` and symlinks them back | One-time, not a cleanup. Refuses rather than guesses: no merging into a non-empty target, no moving open files, no move it cannot finish |
 
 `_common.cmd` holds the shared prologue/epilogue and helpers: the UTF-8 code page, the free-space
 before/after summary, `rmdir` (refuses to touch a drive root), `dirsize` (for the "here is what is
@@ -44,6 +50,21 @@ interpolating it into the command line. That is not stylistic: an apostrophe in 
 (`Gradle's downloads`) closes PowerShell's single-quoted string, the command dies with a parse
 error, and the non-zero exit reads back as "the user said no" — so the script silently does nothing,
 every time.
+
+`_appx-prune.ps1` and `_move-to-e.ps1` back `19-` and `22-`. Both are `.ps1` rather than inline
+PowerShell because the logic in them is the part worth reading, and both default to reporting —
+they need `-Remove` / `-Move` before they touch anything.
+
+## Deleting versus moving
+
+`01-` through `21-` empty something that will fill again. That is fine for what actually is
+temporary, but on a small system drive most of the big folders are not temporary — a dependency
+cache or an emulator image gets re-downloaded to exactly the same place, and the disk is back where
+it started within a week. `22-` is the answer to that: move the folder once, symlink it, and every
+later re-download lands on the other drive.
+
+So: run `22-` once, run `19-`/`20-`/`21-` once (they clear an accumulated backlog rather than a
+daily one), and keep the cache scripts for when you actually need the space back today.
 
 ## Writing your own
 

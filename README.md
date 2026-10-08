@@ -39,8 +39,9 @@ Think `du` on a schedule you control, with the diff already computed.
 - Shows a scan history; picking any past scan renders its report instantly (nothing is recomputed).
 - Right-click (or double-click) any report row to open that folder in Explorer, so you can go straight
   from "what grew" to doing something about it.
-- Runs **cleanup scripts** — plain `.bat` files sitting next to the exe, seventeen of them shipped — one at a
-  time, with their output in front of you and a Kill button when one wedges.
+- Runs **cleanup scripts** — plain `.bat` files sitting next to the exe, the shipped ones — tick
+  as many as you like, press **Run**, and they run one after another. **Stop** ends the queue. A summary
+  shows the total space reclaimed, measured on every fixed volume.
 - Pause / stop mid-scan, a live log of what is being walked, single-instance enforcement, and a clean
   shutdown that leaves nothing running.
 
@@ -284,36 +285,46 @@ that runs the reclaiming half:
 
 ```
 ┌─ Cleanup scripts ──────────────────────────────────────────────────────────┐
-│ Batch files in …\cleanup and beside the executable. Double-click to run.   │
+│ Batch files in …\cleanup and beside the executable. Ticked ones run in turn.│
+│ [x] Select all                                                             │
 │ ┌────────────────────────────────────────────────────────────────────────┐ │
-│ │ cleanup\01-node-caches.bat                                            │ │
-│ │ cleanup\02-dev-toolchain-caches.bat                                   │ │
-│ │ cleanup\03-temp-files.bat                          ← double-click     │ │
-│ │ …                                                                     │ │
-│ │ cleanup\11-gradle-caches.bat                                          │ │
-│ │ cleanup\15-android-emulator-wipe-data.bat                             │ │
+│ │ [x] cleanup-node-caches.bat                                         │ │
+│ │ [ ] cleanup-dev-toolchain-caches.bat                                │ │
+│ │ [x] cleanup-temp-files.bat                                          │ │
+│ │ …                                                                      │ │
 │ └────────────────────────────────────────────────────────────────────────┘ │
-│ [Kill] [Refresh list] [Open folder] [Clear output] [Close]                 │
+│ [Run] [Refresh list] [Open folder] [Clear output] [Close]                  │
 │ ┌────────────────────────────────────────────────────────────────────────┐ │
-│ │ === cleanup\03-temp-files.bat  started 09:41:02 ===                    │ │
-│ │   emptying C:\Users\me\AppData\Local\Temp                              │ │
-│ │   keeping .net\                                                        │ │
-│ │ === finished in 00:00:11 — exit code 0 ===                             │ │
+│ │ === [1/2] cleanup-node-caches.bat  started 09:41:02 ===             │ │
+│ │ …                                                                      │ │
+│ │ ################ SUMMARY ################                              │ │
+│ │ TOTAL RECLAIMED: +4.20 GB                                              │ │
 │ └────────────────────────────────────────────────────────────────────────┘ │
-│ Running cleanup\03-temp-files.bat   elapsed 00:00:11   (Kill stops it)     │
+│ Running 2 of 2: cleanup-temp-files.bat   elapsed 00:00:11               │
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
 - The list is every `*.bat` in `cleanup\` and every `*.bat` sitting directly beside the exe. **Refresh
   list** re-reads both; **Open folder** opens `cleanup\` so you can read a script before trusting it.
-- **Double-click** (or Enter) runs one. The list is **disabled** while it runs and re-enabled when the
-  script exits — two scripts clearing overlapping caches at once produce interleaved output nobody can
-  read and race each other over the same directories.
-- Output is streamed live from both stdout and stderr, and the script's exit code is printed when it
-  finishes.
-- **Kill** terminates the whole process tree, not just `cmd.exe`. That matters: the visible process is
-  the shell, and the work is being done by `dism` / `docker` / `diskpart` underneath it.
-- Closing the dialog with a script still running asks first, then kills it.
+- Each script has a checkbox. **Select all** ticks or clears every box. Your ticks survive **Refresh list**.
+- **Run** starts the ticked scripts, **one after another**, never in parallel — two scripts clearing
+  overlapping caches at once produce interleaved output nobody can read and race each other over the
+  same directories. The list is **disabled** while the queue runs.
+- While the queue runs, **Run** becomes **Stop**. Stop terminates the current script's whole process tree
+  (not just `cmd.exe` — the work is done by `dism` / `docker` / `diskpart` underneath it) and skips the
+  rest of the queue.
+- Output is streamed live from both stdout and stderr, and each script's exit code is printed.
+- **Free space is measured on every fixed volume**, before the queue and after it, and after each script.
+  Volumes are enumerated by volume GUID, not by drive letter, so a folder on C: that is a mount point
+  for a volume living on E: is counted on E:. When the queue ends (or is stopped) a summary lists the
+  change per script, the free space per volume before and after, and **TOTAL RECLAIMED** in GB.
+  The total is the *net* change in free space: other programs write while scripts run, and a move
+  between volumes (`22-move-dev-caches-to-e.bat`) nets to about zero in total — the per-volume lines show
+  the C: gain and the E: loss.
+- Closing the dialog while the queue runs asks first, then stops it.
+- A script that shows a confirmation dialog (`confirm`) simply waits for you; the queue does not move on
+  until you answer. The scripts that do this are marked "Confirms first" in the table below. The rest
+  never ask anything, so a queue of those runs unattended.
 - Scripts run **elevated**, because the app is. No second UAC prompt.
 
 ### What ships
@@ -337,6 +348,7 @@ that runs the reclaiming half:
 | `15-android-emulator-wipe-data.bat` | AVD `userdata`, snapshots, `/cache`, SD-card delta | **Factory-resets every emulator.** Confirms first |
 | `16-chrome-caches.bat` | Chrome HTTP/code/GPU/service-worker caches, all profiles | Confirms, then closes Chrome. Cookies, passwords, history, bookmarks and tabs untouched |
 | `17-firefox-caches.bat` | Firefox `cache2`, `startupCache`, Cache API store, all profiles | Confirms, then closes Firefox. Same guarantees |
+| `18-webappshield-test-leftovers.bat` | `%TEMP%\.net` and `%LOCALAPPDATA%\WinWebAppShield` per-run folders | Left by win-webapp-shield's `smoke-test.ps1`; a folder still in use is skipped, not excluded by name |
 
 Most are caches that regenerate; the exceptions are called out in the table and confirm in a dialog
 first. Scripts split into a safe half and a costly half — `11`/`12` for Gradle, `14`/`15` for the
@@ -496,7 +508,8 @@ one ~64 MB `.exe` with no runtime prerequisite.
 src/DiskSizeGrowthMon/
     Program.cs           entry point, single-instance mutex, elevation check
     MainForm.cs          the main window, built in code (no designer file)
-    CleanupForm.cs       the cleanup dialog: script list, output capture, kill
+    CleanupForm.cs       the cleanup dialog: checked script queue, output capture, stop
+    VolumeSpace.cs       free space of every fixed volume, for the before/after totals
     PathActions.cs       opening report paths in Explorer / a prompt
     DiskScanner.cs       the walk
     Database.cs          schema, persistence, report generation
@@ -568,7 +581,7 @@ incomplete, it is wrong, and it would poison the next comparison as well.
 - The report compares consecutive scans. "Growing gradually over two weeks" needs a query against the
   database — there is one ready to paste [above](#poking-at-it-yourself).
 - No CSV/HTML export from the UI yet; **Copy row** on a report row is the stopgap.
-- The cleanup dialog runs one script at a time and has no scheduling, no dry-run mode, and no
+- The cleanup dialog runs its queue one script at a time and has no scheduling, no dry-run mode, and no
   per-script size estimate before it runs.
 - The report is not refreshed after a cleanup — the numbers you are looking at belong to the scan that
   produced them. Scan again to see the effect.
