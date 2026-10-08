@@ -80,7 +80,7 @@ public sealed class CleanupForm : Form
             CheckOnClick = true
         };
         // ItemCheck fires before the new state is stored, so look at it once the event has finished.
-        _lstScripts.ItemCheck += (_, _) => BeginInvoke(SyncSelectAll);
+        _lstScripts.ItemCheck += (_, _) => BeginInvoke(() => { SyncSelectAll(); SaveSelection(); });
 
         _chkAll = new CheckBox { Text = "Select all", Dock = DockStyle.Top, Height = 24, Padding = new Padding(4, 0, 0, 0) };
         _chkAll.CheckedChanged += (_, _) =>
@@ -171,8 +171,11 @@ public sealed class CleanupForm : Form
     {
         if (_running) return;
 
-        var previouslyChecked = _lstScripts.CheckedItems.OfType<ScriptItem>()
-            .Select(i => i.FullPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // First load: the ticks saved last time. Refresh: whatever is ticked right now.
+        var previouslyChecked = _lstScripts.Items.Count == 0
+            ? LoadSelection()
+            : _lstScripts.CheckedItems.OfType<ScriptItem>().Select(i => i.Display)
+                         .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         var found = new List<ScriptItem>();
         // The cleanup\ subfolder first (that is where the shipped scripts live), then any loose
@@ -180,10 +183,12 @@ public sealed class CleanupForm : Form
         Collect(ScriptFolder, ScriptSubfolder + "\\");
         Collect(ExeFolder, "");
 
+        _loading = true;   // adding items raises ItemCheck; that must not overwrite the saved selection
         _lstScripts.BeginUpdate();
         _lstScripts.Items.Clear();
-        foreach (var item in found) _lstScripts.Items.Add(item, previouslyChecked.Contains(item.FullPath));
+        foreach (var item in found) _lstScripts.Items.Add(item, previouslyChecked.Contains(item.Display));
         _lstScripts.EndUpdate();
+        _loading = false;
         SyncSelectAll();
 
         _lblStatus.Text = _lstScripts.Items.Count == 0
@@ -209,6 +214,34 @@ public sealed class CleanupForm : Form
     }
 
     // ------------------------------------------------------------------ running
+
+    // ------------------------------------------------------------------ remembered ticks
+
+    private bool _loading;
+
+    /// <summary>One display name per line, beside the exe. Saved on every change, so it survives a crash too.</summary>
+    private static string SelectionFile => Path.Combine(ExeFolder, "cleanup-selection.txt");
+
+    private static HashSet<string> LoadSelection()
+    {
+        try
+        {
+            if (File.Exists(SelectionFile))
+                return File.ReadAllLines(SelectionFile).Where(l => l.Length > 0).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+        catch { /* unreadable: start with nothing ticked */ }
+        return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private void SaveSelection()
+    {
+        if (_loading || IsDisposed || _lstScripts.Items.Count == 0) return;
+        try
+        {
+            File.WriteAllLines(SelectionFile, _lstScripts.CheckedItems.OfType<ScriptItem>().Select(i => i.Display));
+        }
+        catch { /* read-only folder: the ticks just are not remembered */ }
+    }
 
     private void SyncSelectAll()
     {
@@ -470,6 +503,7 @@ public sealed class CleanupForm : Form
 
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
+        SaveSelection();
         _uiTimer.Stop();
         _uiTimer.Dispose();
 

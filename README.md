@@ -66,6 +66,7 @@ Grab `DiskSizeGrowthMon.exe` (or build it — see below) and drop it in a folder
 ```
 DiskSizeGrowthMon.exe     the app
 config.json               created on first run with defaults
+cleanup-selection.txt       which cleanup scripts are ticked (created when you tick one)
 diskgrowth.db             SQLite database (plus -wal / -shm while running)
 cleanup\                  the shipped cleanup .bat files
 ```
@@ -306,7 +307,9 @@ that runs the reclaiming half:
 
 - The list is every `*.bat` in `cleanup\` and every `*.bat` sitting directly beside the exe. **Refresh
   list** re-reads both; **Open folder** opens `cleanup\` so you can read a script before trusting it.
-- Each script has a checkbox. **Select all** ticks or clears every box. Your ticks survive **Refresh list**.
+- Each script has a checkbox. **Select all** ticks or clears every box. Your ticks survive **Refresh list**,
+  and are remembered between runs of the dialog and of the app in `cleanup-selection.txt` beside the exe
+  (saved on every change, whether or not you press Run). Delete the file to start with nothing ticked.
 - **Run** starts the ticked scripts, **one after another**, never in parallel — two scripts clearing
   overlapping caches at once produce interleaved output nobody can read and race each other over the
   same directories. The list is **disabled** while the queue runs.
