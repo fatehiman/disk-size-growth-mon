@@ -80,7 +80,13 @@ public sealed class CleanupForm : Form
             CheckOnClick = true
         };
         // ItemCheck fires before the new state is stored, so look at it once the event has finished.
-        _lstScripts.ItemCheck += (_, _) => BeginInvoke(() => { SyncSelectAll(); SaveSelection(); });
+        _lstScripts.ItemCheck += (_, _) =>
+        {
+            // Adding pre-ticked items while loading also raises this, before the form has a handle
+            // (BeginInvoke would throw). LoadScripts syncs the Select all box itself.
+            if (_loading || !IsHandleCreated) return;
+            BeginInvoke(() => { SyncSelectAll(); SaveSelection(); });
+        };
 
         _chkAll = new CheckBox { Text = "Select all", Dock = DockStyle.Top, Height = 24, Padding = new Padding(4, 0, 0, 0) };
         _chkAll.CheckedChanged += (_, _) =>
