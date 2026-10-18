@@ -22,6 +22,9 @@ public sealed class CleanupForm : Form
     private bool _syncingAll;
     private TextBox _txtOutput = null!;
     private Button _btnRun = null!;
+    private Button _btnFolder = null!, _btnClear = null!;
+    private ContextMenuStrip _menu = null!;
+    private ToolStripMenuItem _miRun = null!;
     private Button _btnRefresh = null!;
     private Button _btnClose = null!;
     private Label _lblStatus = null!;
@@ -88,6 +91,27 @@ public sealed class CleanupForm : Form
             BeginInvoke(() => { SyncSelectAll(); SaveSelection(); });
         };
 
+        // Right-click > Run: run only the script under the cursor, ticked or not.
+        _miRun = new ToolStripMenuItem("Run");
+        _menu = new ContextMenuStrip();
+        _menu.Items.Add(_miRun);
+        _lstScripts.ContextMenuStrip = _menu;
+        _menu.Opening += (_, e) =>
+        {
+            var pt = _lstScripts.PointToClient(Cursor.Position);
+            int i = _lstScripts.IndexFromPoint(pt);
+            // Nothing under the cursor, or a queue in progress: no menu at all. Also moves the
+            // highlight to the row, so the menu can never act on a row you did not aim at.
+            if (i < 0 || _running) { e.Cancel = true; return; }
+            _lstScripts.SelectedIndex = i;
+            _miRun.Enabled = true;
+        };
+        _miRun.Click += (_, _) =>
+        {
+            if (_running || _lstScripts.SelectedItem is not ScriptItem script) return;
+            _ = RunOneAsync(script);
+        };
+
         _chkAll = new CheckBox { Text = "Select all", Dock = DockStyle.Top, Height = 24, Padding = new Padding(4, 0, 0, 0) };
         _chkAll.CheckedChanged += (_, _) =>
         {
@@ -109,16 +133,16 @@ public sealed class CleanupForm : Form
         _btnRefresh = new Button { Text = "Refresh list", Size = new Size(100, 26), Margin = new Padding(8, 3, 3, 3) };
         _btnRefresh.Click += (_, _) => LoadScripts();
 
-        var btnFolder = new Button { Text = "Open folder", Size = new Size(100, 26), Margin = new Padding(8, 3, 3, 3) };
-        btnFolder.Click += (_, _) => PathActions.OpenFolder(this, ScriptFolder);
+        _btnFolder = new Button { Text = "Open folder", Size = new Size(100, 26), Margin = new Padding(8, 3, 3, 3) };
+        _btnFolder.Click += (_, _) => PathActions.OpenFolder(this, ScriptFolder);
 
-        var btnClear = new Button { Text = "Clear output", Size = new Size(100, 26), Margin = new Padding(8, 3, 3, 3) };
-        btnClear.Click += (_, _) => _txtOutput.Clear();
+        _btnClear = new Button { Text = "Clear output", Size = new Size(100, 26), Margin = new Padding(8, 3, 3, 3) };
+        _btnClear.Click += (_, _) => _txtOutput.Clear();
 
         _btnClose = new Button { Text = "Close", Size = new Size(80, 26), Margin = new Padding(8, 3, 3, 3) };
         _btnClose.Click += (_, _) => Close();
 
-        strip.Controls.AddRange(new Control[] { _btnRun, _btnRefresh, btnFolder, btnClear, _btnClose });
+        strip.Controls.AddRange(new Control[] { _btnRun, _btnRefresh, _btnFolder, _btnClear, _btnClose });
 
         _txtOutput = new TextBox
         {
@@ -257,9 +281,15 @@ public sealed class CleanupForm : Form
         _syncingAll = false;
     }
 
-    private async Task RunCheckedAsync()
+    private Task RunCheckedAsync() =>
+        RunQueueAsync(_lstScripts.CheckedItems.OfType<ScriptItem>().ToList());
+
+    /// <summary>Right-click > Run: just that script, whatever its checkbox says. Ticks are left alone.</summary>
+    private Task RunOneAsync(ScriptItem script) => RunQueueAsync(new List<ScriptItem> { script });
+
+    private async Task RunQueueAsync(List<ScriptItem> queue)
     {
-        var queue = _lstScripts.CheckedItems.OfType<ScriptItem>().ToList();
+        if (_running) return;
         if (queue.Count == 0)
         {
             MessageBox.Show(this, "Tick at least one script first.", AppConfig.AppTitle,
@@ -452,6 +482,9 @@ public sealed class CleanupForm : Form
         _lstScripts.Enabled = !running;   // one queue at a time
         _chkAll.Enabled = !running;
         _btnRefresh.Enabled = !running;
+        _btnFolder.Enabled = !running;
+        _btnClear.Enabled = !running;
+        _miRun.Enabled = !running;
         _btnRun.Enabled = true;
         _btnRun.Text = running ? "Stop" : "Run";
         if (!running) UpdateStatus();

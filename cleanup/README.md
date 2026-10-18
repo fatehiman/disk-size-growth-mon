@@ -26,7 +26,7 @@ When the queue finishes, the dialog prints how much free space was gained on all
 | `15-android-emulator-wipe-data.bat` | AVD `userdata`, snapshots, `/cache`, SD-card delta | **Factory-resets every emulator.** Confirms first |
 | `16-chrome-caches.bat` | Chrome HTTP/code/GPU/service-worker caches, every profile | Confirms, then closes Chrome. Cookies, passwords, history, bookmarks and tabs untouched |
 | `17-firefox-caches.bat` | Firefox `cache2`, `startupCache`, Cache API store, every profile | Confirms, then closes Firefox. Same guarantees |
-| `18-webappshield-test-leftovers.bat` | `%TEMP%\.net` and `%LOCALAPPDATA%\WinWebAppShield` per-run folders left by win-webapp-shield's `smoke-test.ps1` | No exclusions by name — a folder still in use is simply skipped |
+| `18-webappshield-test-leftovers.bat` | `%TEMP%\.net` folders, and only the cache folders inside each `%LOCALAPPDATA%\WinWebAppShield` profile | Wrapped-app logins are kept; a profile folder is never deleted |
 | `19-stale-store-app-versions.bat` | Superseded versions left in `C:\Program Files\WindowsApps` after a Store app updates | Removes a version only when nobody has it installed **and** a newer one is. A pending update is never touched |
 | `20-leftover-installers.bat` | Setup payloads updaters downloaded, installed from, and kept — Ollama, LM Studio, Insomnia, VMware, NVIDIA, `MSOCache`, `Windows\Panther` | Leaves `ProgramData\Package Cache` and `Windows\Installer` alone: repair and uninstall read those back |
 | `21-reserved-storage-and-winsxs-reset.bat` | Reserved storage, then `/StartComponentCleanup /ResetBase` | Each costs something, which is why `06-` does neither. Asks separately. After `/ResetBase` the updates you have **now** can no longer be uninstalled |

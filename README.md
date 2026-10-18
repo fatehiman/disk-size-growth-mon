@@ -310,9 +310,13 @@ that runs the reclaiming half:
 - Each script has a checkbox. **Select all** ticks or clears every box. Your ticks survive **Refresh list**,
   and are remembered between runs of the dialog and of the app in `cleanup-selection.txt` beside the exe
   (saved on every change, whether or not you press Run). Delete the file to start with nothing ticked.
+- **Right-click a script > Run** runs just that one, ticked or not, and leaves every checkbox as it was —
+  handy for a one-off without losing the selection you keep for the full run. It gets the same summary
+  of reclaimed space.
 - **Run** starts the ticked scripts, **one after another**, never in parallel — two scripts clearing
   overlapping caches at once produce interleaved output nobody can read and race each other over the
-  same directories. The list is **disabled** while the queue runs.
+  same directories. While anything runs the list, Select all, the right-click menu, Refresh list, Open folder and Clear output
+  are all disabled, so two scripts can never run at once. Only **Stop** (and Close, which asks) stay live.
 - While the queue runs, **Run** becomes **Stop**. Stop terminates the current script's whole process tree
   (not just `cmd.exe` — the work is done by `dism` / `docker` / `diskpart` underneath it) and skips the
   rest of the queue.
@@ -351,7 +355,7 @@ that runs the reclaiming half:
 | `15-android-emulator-wipe-data.bat` | AVD `userdata`, snapshots, `/cache`, SD-card delta | **Factory-resets every emulator.** Confirms first |
 | `16-chrome-caches.bat` | Chrome HTTP/code/GPU/service-worker caches, all profiles | Confirms, then closes Chrome. Cookies, passwords, history, bookmarks and tabs untouched |
 | `17-firefox-caches.bat` | Firefox `cache2`, `startupCache`, Cache API store, all profiles | Confirms, then closes Firefox. Same guarantees |
-| `18-webappshield-test-leftovers.bat` | `%TEMP%\.net` and `%LOCALAPPDATA%\WinWebAppShield` per-run folders | Left by win-webapp-shield's `smoke-test.ps1`; a folder still in use is skipped, not excluded by name |
+| `18-webappshield-test-leftovers.bat` | `%TEMP%\.net` folders, and only the cache folders inside each `%LOCALAPPDATA%\WinWebAppShield` profile | Wrapped-app logins are kept; a profile folder is never deleted |
 
 Most are caches that regenerate; the exceptions are called out in the table and confirm in a dialog
 first. Scripts split into a safe half and a costly half — `11`/`12` for Gradle, `14`/`15` for the
